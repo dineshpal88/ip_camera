@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Android IP Camera</string>
+    <string name="notification_channel_name">Camera Streaming</string>
+    <string name="notification_channel_desc">Shows when the IP camera RTSP stream is active</string>
+    <string name="notification_streaming">Streaming camera on %1$s</string>
+    <string name="notification_stop">Stop streaming</string>
+</resources>
