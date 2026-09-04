@@ -1,8 +1,8 @@
-import 'package:android_ip_camera/features/vehicle_monitoring/models/detected_vehicle.dart';
-import 'package:android_ip_camera/features/vehicle_monitoring/services/detected_vehicle_repository.dart';
-import 'package:android_ip_camera/features/vehicle_monitoring/widgets/app_shell.dart';
-import 'package:android_ip_camera/models/stream_info.dart';
-import 'package:android_ip_camera/services/stream_platform.dart';
+import 'package:android_ip_camera/features/camera_host/domain/entities/stream_info.dart';
+import 'package:android_ip_camera/features/vehicle_monitoring/data/repositories/detection_repository_impl.dart';
+import 'package:android_ip_camera/features/vehicle_monitoring/domain/entities/app_destination.dart';
+import 'package:android_ip_camera/features/vehicle_monitoring/domain/entities/detected_vehicle.dart';
+import 'package:android_ip_camera/core/platform/stream_url_utils.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -48,8 +48,7 @@ void main() {
   });
 
   test('Duplicate detection is suppressed during cooldown', () {
-    final repo = DetectedVehicleRepository.instance;
-    repo.clear();
+    final repo = DetectionRepositoryImpl();
     repo.cooldown = const Duration(seconds: 30);
 
     final first = DetectedVehicle(
@@ -74,10 +73,10 @@ void main() {
     expect(repo.detections.length, 2);
   });
 
-  testWidgets('App shell destinations include Add Camera', (tester) async {
-    expect(AppShellDestination.addCamera.label, 'Add Camera');
-    expect(AppShellDestination.scanVehicle.routeName, '/scan-vehicle');
-    expect(AppShellDestination.values.length, 5);
+  test('App destinations include Add Camera', () {
+    expect(AppDestination.addCamera.label, 'Add Camera');
+    expect(AppDestination.scanVehicle.routeName, '/scan-vehicle');
+    expect(AppDestination.values.length, 5);
   });
 
   testWidgets('Blank home content builds', (tester) async {
