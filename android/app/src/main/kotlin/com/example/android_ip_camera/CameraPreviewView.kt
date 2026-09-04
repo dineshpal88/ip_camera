@@ -16,7 +16,7 @@ class CameraPreviewView(
     init {
         textureView.surfaceTextureListener = this
         IpCameraEngine.setPreviewBufferSizeListener { width, height ->
-            applyBufferSize(width, height, restartPreview = false)
+            applyBufferSize(width, height, restartPreview = true)
         }
     }
 

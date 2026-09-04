@@ -76,8 +76,8 @@ class MainActivity : FlutterActivity() {
                         result.success(IpCameraEngine.getStreamInfo())
                     }
                     "setResolution" -> {
-                        val w = call.argument<Int>("width") ?: 1280
-                        val h = call.argument<Int>("height") ?: 720
+                        val w = call.argument<Int>("width") ?: 720
+                        val h = call.argument<Int>("height") ?: 1280
                         IpCameraEngine.setResolution(w, h)
                         result.success(true)
                     }

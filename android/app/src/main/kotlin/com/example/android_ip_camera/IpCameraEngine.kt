@@ -63,6 +63,12 @@ object IpCameraEngine {
     fun setResolution(width: Int, height: Int) {
         if (streaming.get()) return
         config = config.copy(width = width, height = height)
+        cameraManager?.let { manager ->
+            manager.updateConfiguration(config)
+            val resolved = manager.resolveSize(width, height)
+            config = config.copy(width = resolved.width, height = resolved.height)
+        }
+        notifyPreviewBufferSize()
     }
 
     fun setFps(fps: Int) {

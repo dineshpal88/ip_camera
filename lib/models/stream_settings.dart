@@ -1,7 +1,7 @@
 class StreamSettings {
   const StreamSettings({
-    this.width = 1280,
-    this.height = 720,
+    this.width = 720,
+    this.height = 1280,
     this.fps = 30,
     this.bitrate = 2000000,
     this.lanOnly = true,
@@ -32,9 +32,9 @@ class StreamSettings {
   String get resolutionLabel => '${width}x$height';
 
   static const resolutions = <Map<String, int>>[
-    {'width': 640, 'height': 480},
-    {'width': 1280, 'height': 720},
-    {'width': 1920, 'height': 1080},
+    {'width': 540, 'height': 960},
+    {'width': 720, 'height': 1280},
+    {'width': 1080, 'height': 1920},
   ];
 
   static const fpsOptions = [15, 24, 30];

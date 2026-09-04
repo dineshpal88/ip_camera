@@ -14,7 +14,7 @@ class CameraPreview extends StatelessWidget {
     return ClipRRect(
       borderRadius: BorderRadius.circular(16),
       child: AspectRatio(
-        aspectRatio: 16 / 9,
+        aspectRatio: 9 / 16,
         child: AndroidView(
           viewType: 'android_ip_camera/preview',
           layoutDirection: TextDirection.ltr,

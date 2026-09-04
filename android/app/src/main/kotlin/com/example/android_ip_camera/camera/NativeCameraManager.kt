@@ -260,8 +260,17 @@ class NativeCameraManager(
                 else -> emptyList()
             }
             if (sizes.isEmpty()) return Size(targetW, targetH)
-            sizes.minByOrNull { abs(it.width - targetW) + abs(it.height - targetH) }
-                ?: Size(targetW, targetH)
+
+            val portraitTarget = targetH > targetW
+            val targetAspect = targetW.toFloat() / targetH.toFloat()
+            val oriented = sizes.filter { (it.height > it.width) == portraitTarget }
+            val candidates = if (oriented.isNotEmpty()) oriented else sizes
+
+            candidates.minByOrNull { size ->
+                val aspect = size.width.toFloat() / size.height.toFloat()
+                abs(size.width - targetW) + abs(size.height - targetH) +
+                    (abs(aspect - targetAspect) * 1000).toInt()
+            } ?: Size(targetW, targetH)
         } catch (e: Exception) {
             Size(targetW, targetH)
         }
