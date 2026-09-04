@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'camera_screen.dart';
 import 'connect_camera_screen.dart';
 
+/// Legacy entry buttons — kept for direct navigation / tests.
+/// The app now launches into [VehicleMonitoringRoot].
 class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key});
 

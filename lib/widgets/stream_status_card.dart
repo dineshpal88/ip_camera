@@ -46,6 +46,17 @@ class StreamStatusCard extends StatelessWidget {
                           fontWeight: FontWeight.w600,
                         ),
                       ),
+                      if (info.mjpegUrl.isNotEmpty) ...[
+                        const SizedBox(height: 12),
+                        Text('Web MJPEG URL', style: theme.textTheme.labelLarge),
+                        const SizedBox(height: 4),
+                        SelectableText(
+                          info.mjpegUrl,
+                          style: theme.textTheme.bodyMedium?.copyWith(
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
                     ],
                   ),
                 ),

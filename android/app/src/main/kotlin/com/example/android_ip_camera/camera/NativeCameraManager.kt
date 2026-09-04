@@ -1,14 +1,15 @@
 package com.example.android_ip_camera.camera
 
 import android.content.Context
+import android.graphics.ImageFormat
 import android.graphics.SurfaceTexture
 import android.hardware.camera2.CameraCaptureSession
+import android.media.ImageReader
 import android.media.MediaCodec
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraDevice
 import android.hardware.camera2.CameraManager
 import android.hardware.camera2.CaptureRequest
-import android.hardware.camera2.params.StreamConfigurationMap
 import android.os.Handler
 import android.os.HandlerThread
 import android.util.Log
@@ -17,6 +18,7 @@ import android.view.Surface
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.abs
 
 class NativeCameraManager(
@@ -25,6 +27,7 @@ class NativeCameraManager(
 ) {
     companion object {
         private const val TAG = "CameraManager"
+        private const val MJPEG_MIN_INTERVAL_MS = 80L // ~12 fps for web
     }
 
     private val systemCameraManager =
@@ -35,10 +38,14 @@ class NativeCameraManager(
     private var captureSession: CameraCaptureSession? = null
     private var previewSurface: Surface? = null
     private var encoderSurface: Surface? = null
+    private var jpegReader: ImageReader? = null
+    private var onJpegFrame: ((ByteArray) -> Unit)? = null
+    private var jpegOutputsDisabled = false
     private var config = CameraConfiguration()
     private var cameraId: String? = null
     private val sessionReady = AtomicBoolean(false)
     private var sessionReadyLatch: CountDownLatch? = null
+    private val lastJpegMs = AtomicLong(0)
 
     fun getCameraFacingLabel(): String =
         if (config.useFrontCamera) "Front" else "Rear"
@@ -53,6 +60,17 @@ class NativeCameraManager(
         systemCameraManager.cameraIdList.toList()
     } catch (e: Exception) {
         emptyList()
+    }
+
+    fun setJpegFrameListener(listener: ((ByteArray) -> Unit)?) {
+        onJpegFrame = listener
+        jpegOutputsDisabled = false
+        if (listener == null) {
+            releaseJpegReader()
+        }
+        if (cameraDevice != null) {
+            createCaptureSession()
+        }
     }
 
     fun openPreview(preview: Surface, encoderInput: Surface?) {
@@ -100,6 +118,7 @@ class NativeCameraManager(
         } catch (_: Exception) {
         }
         captureSession = null
+        releaseJpegReader()
         try {
             cameraDevice?.close()
         } catch (_: Exception) {
@@ -108,6 +127,14 @@ class NativeCameraManager(
         cameraThread?.quitSafely()
         cameraThread = null
         cameraHandler = null
+    }
+
+    private fun releaseJpegReader() {
+        try {
+            jpegReader?.close()
+        } catch (_: Exception) {
+        }
+        jpegReader = null
     }
 
     private fun ensureThread() {
@@ -174,11 +201,53 @@ class NativeCameraManager(
         captureSession = null
     }
 
+    private fun ensureJpegReader(cameraId: String) {
+        if (onJpegFrame == null || jpegOutputsDisabled) {
+            releaseJpegReader()
+            return
+        }
+        if (jpegReader != null) return
+
+        val jpegSize = chooseJpegSize(cameraId)
+        val reader = ImageReader.newInstance(
+            jpegSize.width,
+            jpegSize.height,
+            ImageFormat.JPEG,
+            2,
+        )
+        reader.setOnImageAvailableListener({ r ->
+            val image = try {
+                r.acquireLatestImage()
+            } catch (_: Exception) {
+                null
+            } ?: return@setOnImageAvailableListener
+            try {
+                val now = System.currentTimeMillis()
+                if (now - lastJpegMs.get() < MJPEG_MIN_INTERVAL_MS) return@setOnImageAvailableListener
+                lastJpegMs.set(now)
+                val buffer = image.planes[0].buffer
+                val bytes = ByteArray(buffer.remaining())
+                buffer.get(bytes)
+                onJpegFrame?.invoke(bytes)
+            } catch (e: Exception) {
+                Log.w(TAG, "JPEG frame failed", e)
+            } finally {
+                image.close()
+            }
+        }, cameraHandler)
+        jpegReader = reader
+        Log.i(TAG, "JPEG reader ${jpegSize.width}x${jpegSize.height} for MJPEG")
+    }
+
     private fun createCaptureSession() {
         val camera = cameraDevice ?: return
+        val id = cameraId ?: return
+        ensureJpegReader(id)
+
         val surfaces = mutableListOf<Surface>()
         previewSurface?.let { surfaces.add(it) }
         encoderSurface?.let { surfaces.add(it) }
+        jpegReader?.surface?.let { surfaces.add(it) }
         if (surfaces.isEmpty()) {
             onError("No capture surfaces are available.")
             return
@@ -199,7 +268,14 @@ class NativeCameraManager(
                     }
 
                     override fun onConfigureFailed(session: CameraCaptureSession) {
-                        Log.e(TAG, "Capture session configure failed")
+                        Log.e(TAG, "Capture session configure failed with JPEG; retrying without MJPEG")
+                        // Keep RTSP/preview working if device rejects 3 outputs.
+                        if (jpegReader != null && !jpegOutputsDisabled) {
+                            jpegOutputsDisabled = true
+                            releaseJpegReader()
+                            createCaptureSession()
+                            return
+                        }
                         sessionReadyLatch?.countDown()
                         onError("Failed to configure camera session")
                     }
@@ -214,7 +290,7 @@ class NativeCameraManager(
 
     private fun startRepeatingRequest(session: CameraCaptureSession) {
         val camera = cameraDevice ?: return
-        val targets = listOfNotNull(previewSurface, encoderSurface)
+        val targets = listOfNotNull(previewSurface, encoderSurface, jpegReader?.surface)
         if (targets.isEmpty()) return
         try {
             val builder = camera.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
@@ -240,6 +316,26 @@ class NativeCameraManager(
             } ?: systemCameraManager.cameraIdList.firstOrNull()
         } catch (e: Exception) {
             null
+        }
+    }
+
+    private fun chooseJpegSize(cameraId: String): Size {
+        return try {
+            val map = systemCameraManager
+                .getCameraCharacteristics(cameraId)
+                .get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+                ?: return Size(720, 1280)
+            val jpegSizes = map.getOutputSizes(ImageFormat.JPEG)?.toList().orEmpty()
+            if (jpegSizes.isEmpty()) return Size(720, 1280)
+            val portrait = config.height > config.width
+            val filtered = jpegSizes.filter { (it.height > it.width) == portrait }
+            val pool = if (filtered.isNotEmpty()) filtered else jpegSizes
+            // Prefer ~720p-ish for web bandwidth.
+            pool.minByOrNull { size ->
+                abs(size.width - 720) + abs(size.height - 1280)
+            } ?: Size(720, 1280)
+        } catch (_: Exception) {
+            Size(720, 1280)
         }
     }
 

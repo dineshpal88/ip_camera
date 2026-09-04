@@ -7,6 +7,7 @@ import android.view.Surface
 import com.example.android_ip_camera.camera.CameraConfiguration
 import com.example.android_ip_camera.camera.NativeCameraManager
 import com.example.android_ip_camera.encoder.H264Encoder
+import com.example.android_ip_camera.http.MjpegHttpServer
 import com.example.android_ip_camera.network.NetworkUtils
 import com.example.android_ip_camera.rtsp.RtspServer
 import com.example.android_ip_camera.rtsp.SdpBuilder
@@ -18,12 +19,15 @@ import java.util.concurrent.atomic.AtomicBoolean
 object IpCameraEngine {
     private const val TAG = "IPCamera"
     const val RTSP_PORT = 8554
+    const val MJPEG_PORT = 8080
     const val STREAM_PATH = "/live"
+    const val MJPEG_PATH = "/stream.mjpg"
 
     private var appContext: Context? = null
     private var cameraManager: NativeCameraManager? = null
     private var encoder: H264Encoder? = null
     private var rtspServer: RtspServer? = null
+    private var mjpegServer: MjpegHttpServer? = null
     private var previewSurface: Surface? = null
     private var config = CameraConfiguration()
     private val streaming = AtomicBoolean(false)
@@ -160,27 +164,34 @@ object IpCameraEngine {
         }
         encoder = enc
 
+        // Start MJPEG early so the first capture session includes a JPEG target.
+        val mjpeg = MjpegHttpServer(MJPEG_PORT)
+        if (mjpeg.start()) {
+            mjpegServer = mjpeg
+            manager.setJpegFrameListener { jpeg ->
+                mjpegServer?.publishFrame(jpeg)
+            }
+            Log.i(TAG, "MJPEG ready at http://$ip:$MJPEG_PORT$MJPEG_PATH")
+        } else {
+            Log.w(TAG, "MJPEG server failed to start; RTSP still available")
+            mjpegServer = null
+        }
+
         attachCameraToEncoder()
 
         if (!manager.awaitSessionReady(5000)) {
-            enc.stop()
-            encoder = null
-            detachEncoderFromCamera()
+            cleanupFailedStart(enc)
             return errorMap("Camera session failed to start for streaming.")
         }
 
         val sdpReady = waitForSpsPps(enc, 5000)
         if (!sdpReady) {
-            enc.stop()
-            encoder = null
-            detachEncoderFromCamera()
+            cleanupFailedStart(enc)
             return errorMap("Failed to obtain H.264 codec configuration.")
         }
 
         if (!firstFrameLatch.await(5, TimeUnit.SECONDS)) {
-            enc.stop()
-            encoder = null
-            detachEncoderFromCamera()
+            cleanupFailedStart(enc)
             return errorMap("Camera is not producing video frames for the stream.")
         }
 
@@ -220,8 +231,7 @@ object IpCameraEngine {
         )
 
         if (!server.start()) {
-            enc.stop()
-            encoder = null
+            cleanupFailedStart(enc)
             return errorMap("RTSP port $RTSP_PORT is already in use.")
         }
 
@@ -229,12 +239,24 @@ object IpCameraEngine {
         streaming.set(true)
         val info = getStreamInfo()
         emit(mapOf("type" to "streamingStarted", "rtspUrl" to info["rtspUrl"]))
-        Log.i(TAG, "Streaming started ${info["rtspUrl"]}")
+        Log.i(TAG, "Streaming started ${info["rtspUrl"]} mjpeg=${info["mjpegUrl"]}")
         return info
+    }
+
+    private fun cleanupFailedStart(enc: H264Encoder) {
+        cameraManager?.setJpegFrameListener(null)
+        mjpegServer?.stop()
+        mjpegServer = null
+        enc.stop()
+        encoder = null
+        detachEncoderFromCamera()
     }
 
     fun stopStream() {
         if (!streaming.getAndSet(false)) return
+        cameraManager?.setJpegFrameListener(null)
+        mjpegServer?.stop()
+        mjpegServer = null
         rtspServer?.stop()
         rtspServer = null
         encoder?.stop()
@@ -260,11 +282,19 @@ object IpCameraEngine {
     fun getStreamInfo(): Map<String, Any?> {
         val ip = getDeviceIp()
         val url = if (!ip.isNullOrBlank()) "rtsp://$ip:$RTSP_PORT$STREAM_PATH" else null
+        val mjpegUrl =
+            if (!ip.isNullOrBlank() && mjpegServer != null) {
+                "http://$ip:$MJPEG_PORT$MJPEG_PATH"
+            } else {
+                ""
+            }
         return mapOf(
             "ip" to (ip ?: ""),
             "port" to RTSP_PORT,
             "path" to STREAM_PATH,
             "rtspUrl" to (url ?: ""),
+            "mjpegUrl" to mjpegUrl,
+            "mjpegPort" to MJPEG_PORT,
             "streaming" to streaming.get(),
             "clientCount" to getClientCount(),
             "camera" to cameraFacing(),

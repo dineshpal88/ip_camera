@@ -1,8 +1,14 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
+
+import '../services/rtsp_player_config.dart';
+import '../services/stream_platform.dart';
+import '../widgets/mjpeg_view.dart';
 
 class RtspViewerScreen extends StatefulWidget {
   const RtspViewerScreen({super.key, required this.rtspUrl});
@@ -23,6 +29,8 @@ class _RtspViewerScreenState extends State<RtspViewerScreen> {
   String _status = 'Preparing player…';
   bool _connecting = true;
   bool _hasVideo = false;
+  bool _usingMjpeg = false;
+  String? _playbackUrl;
 
   @override
   void initState() {
@@ -34,7 +42,50 @@ class _RtspViewerScreenState extends State<RtspViewerScreen> {
     await _disposePlayer();
     if (!mounted) return;
 
+    final playback = playbackUrlForPlatform(widget.rtspUrl);
+    if (playback == null) {
+      setState(() {
+        _connecting = false;
+        _hasVideo = false;
+        _status = 'Unsupported';
+        _error = kWebRtspUnsupportedMessage;
+        _usingMjpeg = false;
+        _playbackUrl = null;
+      });
+      return;
+    }
+
+    // Web + derived MJPEG (or direct http mjpeg/hls).
+    if (kIsWeb && (isMjpegUrl(playback) || isWebCompatibleStreamUrl(playback))) {
+      if (isMjpegUrl(playback) || playback.toLowerCase().contains('.mjpg')) {
+        setState(() {
+          _usingMjpeg = true;
+          _playbackUrl = playback;
+          _connecting = true;
+          _hasVideo = false;
+          _error = null;
+          _status = 'Connecting to $playback';
+        });
+        // onLoad from MjpegView will clear connecting.
+        return;
+      }
+    }
+
+    if (kIsWeb && isRtspUrl(widget.rtspUrl) && !isWebCompatibleStreamUrl(playback)) {
+      setState(() {
+        _usingMjpeg = false;
+        _connecting = false;
+        _hasVideo = false;
+        _status = 'Unsupported on Web';
+        _error = kWebRtspUnsupportedMessage;
+        _playbackUrl = playback;
+      });
+      return;
+    }
+
     setState(() {
+      _usingMjpeg = false;
+      _playbackUrl = playback;
       _connecting = true;
       _hasVideo = false;
       _error = null;
@@ -60,32 +111,15 @@ class _RtspViewerScreenState extends State<RtspViewerScreen> {
       _controller = controller;
       _attachListeners(player);
 
-      // Do NOT set `vo` manually on Android. That crashes libmpv with:
-      // assertion "vo->opts->WinID != 0 && vo->opts->WinID != -1"
-      // VideoController + Video widget attach the Android surface.
-      final platform = player.platform;
-      if (platform is NativePlayer) {
-        await platform.setProperty('demuxer', 'lavf');
-        await platform.setProperty('demuxer-lavf-format', 'rtsp');
-        await platform.setProperty(
-          'demuxer-lavf-o',
-          'rtsp_transport=tcp,stimeout=5000000',
-        );
-        await platform.setProperty('rtsp-transport', 'tcp');
-        await platform.setProperty('network-timeout', '10');
-        // Video-only stream from our IP camera server.
-        await platform.setProperty('aid', 'no');
-        await platform.setProperty('audio', 'no');
-        await platform.setProperty('cache', 'no');
-        await platform.setProperty('demuxer-readahead-secs', '1');
+      if (isRtspUrl(playback)) {
+        await configureRtspNativePlayer(player);
       }
 
       if (!mounted) return;
       setState(() {
-        _status = 'Connecting to ${widget.rtspUrl}';
+        _status = 'Connecting to $playback';
       });
 
-      // Wait one frame so Video widget can attach the Android surface (WinID).
       await Future<void>.delayed(const Duration(milliseconds: 300));
       if (!mounted || _player != player) return;
 
@@ -100,8 +134,7 @@ class _RtspViewerScreenState extends State<RtspViewerScreen> {
         });
       });
 
-      final url = widget.rtspUrl.trim();
-      await player.open(Media(url), play: true);
+      await player.open(Media(playback), play: true);
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -171,6 +204,15 @@ class _RtspViewerScreenState extends State<RtspViewerScreen> {
     }
   }
 
+  Future<void> _copyUrl() async {
+    final text = (_playbackUrl ?? widget.rtspUrl).trim();
+    await Clipboard.setData(ClipboardData(text: text));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Copied $text')),
+    );
+  }
+
   @override
   void dispose() {
     _disposePlayer();
@@ -181,6 +223,7 @@ class _RtspViewerScreenState extends State<RtspViewerScreen> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final controller = _controller;
+    final mjpegUrl = _playbackUrl;
 
     return Scaffold(
       appBar: AppBar(
@@ -200,7 +243,29 @@ class _RtspViewerScreenState extends State<RtspViewerScreen> {
                     child: Stack(
                       fit: StackFit.expand,
                       children: [
-                        if (controller != null)
+                        if (_usingMjpeg && mjpegUrl != null)
+                          MjpegView(
+                            url: mjpegUrl,
+                            onLoaded: () {
+                              if (!mounted) return;
+                              setState(() {
+                                _hasVideo = true;
+                                _connecting = false;
+                                _error = null;
+                                _status = 'Streaming (MJPEG)';
+                              });
+                            },
+                            onError: (message) {
+                              if (!mounted) return;
+                              setState(() {
+                                _connecting = false;
+                                _hasVideo = false;
+                                _error = message;
+                                _status = 'MJPEG offline';
+                              });
+                            },
+                          )
+                        else if (!_usingMjpeg && controller != null)
                           Video(
                             controller: controller,
                             controls: NoVideoControls,
@@ -253,6 +318,14 @@ class _RtspViewerScreenState extends State<RtspViewerScreen> {
                                     icon: const Icon(Icons.refresh_rounded),
                                     label: const Text('Retry'),
                                   ),
+                                  if (kIsWeb) ...[
+                                    const SizedBox(height: 8),
+                                    OutlinedButton.icon(
+                                      onPressed: _copyUrl,
+                                      icon: const Icon(Icons.copy_rounded),
+                                      label: const Text('Copy stream URL'),
+                                    ),
+                                  ],
                                 ],
                               ),
                             ),
@@ -276,7 +349,7 @@ class _RtspViewerScreenState extends State<RtspViewerScreen> {
                         : theme.colorScheme.error,
                   ),
                   title: Text(_hasVideo ? 'Video received' : _status),
-                  subtitle: Text(widget.rtspUrl),
+                  subtitle: Text(_playbackUrl ?? widget.rtspUrl),
                   trailing: IconButton(
                     tooltip: 'Retry',
                     onPressed: _initAndPlay,

@@ -4,6 +4,7 @@ class StreamInfo {
     this.port = 8554,
     this.path = '/live',
     this.rtspUrl = '',
+    this.mjpegUrl = '',
     this.streaming = false,
     this.clientCount = 0,
     this.camera = 'Rear',
@@ -17,6 +18,7 @@ class StreamInfo {
   final int port;
   final String path;
   final String rtspUrl;
+  final String mjpegUrl;
   final bool streaming;
   final int clientCount;
   final String camera;
@@ -33,6 +35,7 @@ class StreamInfo {
       port: (map['port'] as num?)?.toInt() ?? 8554,
       path: map['path']?.toString() ?? '/live',
       rtspUrl: map['rtspUrl']?.toString() ?? '',
+      mjpegUrl: map['mjpegUrl']?.toString() ?? '',
       streaming: map['streaming'] == true,
       clientCount: (map['clientCount'] as num?)?.toInt() ?? 0,
       camera: map['camera']?.toString() ?? 'Rear',
